@@ -12,7 +12,7 @@ func proxy(from io.Reader, to io.Writer) error {
 	toReader, toIsReader := to.(io.Reader)
 
 	if toIsReader && fromIsWriter {
-		// 필요한 인터페이스르 ㄹ모두 구현하였으니
+		// 필요한 인터페이스를 모두 구현하였으니
 		// from 과 to에 대응하는 프락시 생성
 		go func() { _, _ = io.Copy(fromWriter, toReader) }()
 	}
@@ -26,7 +26,6 @@ func TestProxy(t *testing.T) {
 
 	// 서버는 "ping" 메시지를 대기하고 "pong" 메시지로 응답한다.
 	// 그 외의 메시지는 동일하게 클라이언트로 에코잉된다.
-
 	server, err := net.Listen("tcp", "127.0.0.1:")
 	if err != nil {
 		t.Fatal(err)
@@ -109,4 +108,42 @@ func TestProxy(t *testing.T) {
 			}(conn)
 		}
 	}()
+
+	conn, err := net.Dial("tcp", proxyServer.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []struct{ Message, Reply string }{
+		{"ping", "pong"},
+		{"pong", "pong"},
+		{"echo", "echo"},
+		{"ping", "pong"},
+	}
+
+	for i, m := range msgs {
+		_, err = conn.Write([]byte(m.Message))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		actual := string(buf[:n])
+		t.Logf("%q -> proxy -> %q", m.Message, actual)
+
+		if actual != m.Reply {
+			t.Errorf("%d: expected reply: %q; actual: %q", i, m.Reply, actual)
+		}
+	}
+
+	_ = conn.Close()
+	_ = proxyServer.Close()
+	_ = server.Close()
+
+	wg.Wait()
 }
