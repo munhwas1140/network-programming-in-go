@@ -11,7 +11,6 @@ func proxyConn(source, destination string) error {
 		return err
 	}
 	defer connSource.Close()
-
 	connDestination, err := net.Dial("tcp", destination)
 	if err != nil {
 		return err
@@ -22,6 +21,7 @@ func proxyConn(source, destination string) error {
 	go func() { _, _ = io.Copy(connSource, connDestination) }()
 
 	// connDestination으로 메시지를 보내는 connSource
+
 	_, err = io.Copy(connDestination, connSource)
 	return err
 }

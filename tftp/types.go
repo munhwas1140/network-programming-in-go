@@ -1,5 +1,3 @@
-// tftp 의 일부를 제한적인 기능으로 구현함
-// https://datatracker.ietf.org/doc/html/rfc783
 package tftp
 
 import (
@@ -11,15 +9,15 @@ import (
 )
 
 const (
-	DatagramSize = 516              // 최대 지원하는 데이터그램 크기
-	BlockSize    = DatagramSize - 4 // DatagramSize - 4바이트 헤더
+	DatagramSize = 516              // the maximum supported datagram size
+	BlockSize    = DatagramSize - 4 // the DatagramSize minus a 4-byte header
 )
 
-type OpCode int16
+type OpCode uint16
 
 const (
-	OpRRQ OpCode = iota + 1 // Read Request
-	_                       // 쓰기요청인 OpWRQ 미지원
+	OpRRQ OpCode = iota + 1
+	_            // no WRQ support
 	OpData
 	OpAck
 	OpErr
@@ -28,7 +26,7 @@ const (
 type ErrCode uint16
 
 const (
-	ErrUnknown ErrCode = iota + 1
+	ErrUnknown ErrCode = iota
 	ErrNotFound
 	ErrAccessViolation
 	ErrDiskFull
@@ -40,44 +38,42 @@ const (
 
 type ReadReq struct {
 	Filename string
-	Mode     string // netascii, octet
+	Mode     string
 }
 
-// 서버에서 사용되지는 않지만 클라이언트가 이 메서드를 사용한다.
 func (q ReadReq) MarshalBinary() ([]byte, error) {
 	mode := "octet"
 	if q.Mode != "" {
 		mode = q.Mode
 	}
 
-	// OP코드 + 파일명 + 0바이트 + 모드 정보 + 0 바이트
-
-	cap := 2 + 2 + len(q.Filename) + 1 + len(q.Mode) + 1
+	// operation code + filename + 0 byte + mode + 0 byte
+	cap := 2 + 2 + len(q.Filename) + 1 + len(mode) + 1
 
 	b := new(bytes.Buffer)
 	b.Grow(cap)
 
-	err := binary.Write(b, binary.BigEndian, OpRRQ) // OP코드 쓰기
+	err := binary.Write(b, binary.BigEndian, OpRRQ) // write operation code
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = b.WriteString(q.Filename)
+	_, err = b.WriteString(q.Filename) // write filename
 	if err != nil {
 		return nil, err
 	}
 
-	err = b.WriteByte(0)
+	err = b.WriteByte(0) // write 0 byte
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = b.WriteString(mode)
+	_, err = b.WriteString(mode) // write mode
 	if err != nil {
 		return nil, err
 	}
 
-	err = b.WriteByte(0)
+	err = b.WriteByte(0) // write 0 byte
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +86,7 @@ func (q *ReadReq) UnmarshalBinary(p []byte) error {
 
 	var code OpCode
 
-	err := binary.Read(r, binary.BigEndian, &code)
+	err := binary.Read(r, binary.BigEndian, &code) // read operation code
 	if err != nil {
 		return err
 	}
@@ -99,27 +95,27 @@ func (q *ReadReq) UnmarshalBinary(p []byte) error {
 		return errors.New("invalid RRQ")
 	}
 
-	q.Filename, err = r.ReadString(0)
+	q.Filename, err = r.ReadString(0) // read filename
 	if err != nil {
 		return errors.New("invalid RRQ")
 	}
 
-	q.Filename = strings.TrimRight(q.Filename, "\x00")
+	q.Filename = strings.TrimRight(q.Filename, "\x00") // remove the 0-byte
 	if len(q.Filename) == 0 {
 		return errors.New("invalid RRQ")
 	}
 
-	q.Mode, err = r.ReadString(0)
+	q.Mode, err = r.ReadString(0) // read mode
 	if err != nil {
 		return errors.New("invalid RRQ")
 	}
 
-	q.Mode = strings.TrimRight(q.Mode, "\x00")
+	q.Mode = strings.TrimRight(q.Mode, "\x00") // remove the 0-byte
 	if len(q.Mode) == 0 {
 		return errors.New("invalid RRQ")
 	}
 
-	actual := strings.ToLower(q.Mode) // 강제로 octet 모드 설정
+	actual := strings.ToLower(q.Mode) // enforce octet mode
 	if actual != "octet" {
 		return errors.New("only binary transfers supported")
 	}
@@ -136,19 +132,19 @@ func (d *Data) MarshalBinary() ([]byte, error) {
 	b := new(bytes.Buffer)
 	b.Grow(DatagramSize)
 
-	d.Block++
+	d.Block++ // block numbers increment from 1
 
-	err := binary.Write(b, binary.BigEndian, OpData)
+	err := binary.Write(b, binary.BigEndian, OpData) // write operation code
 	if err != nil {
 		return nil, err
 	}
 
-	err = binary.Write(b, binary.BigEndian, d.Block)
+	err = binary.Write(b, binary.BigEndian, d.Block) // write block number
 	if err != nil {
 		return nil, err
 	}
 
-	// BlockSize만큼 쓰기
+	// write up to BlockSize worth of bytes
 	_, err = io.CopyN(b, d.Payload, BlockSize)
 	if err != nil && err != io.EOF {
 		return nil, err
@@ -173,6 +169,7 @@ func (d *Data) UnmarshalBinary(p []byte) error {
 	if err != nil {
 		return errors.New("invalid DATA")
 	}
+
 	d.Payload = bytes.NewBuffer(p[4:])
 
 	return nil
@@ -181,17 +178,17 @@ func (d *Data) UnmarshalBinary(p []byte) error {
 type Ack uint16
 
 func (a Ack) MarshalBinary() ([]byte, error) {
-	cap := 2 + 2 // OP code, Block number
+	cap := 2 + 2 // operation code + block number
 
 	b := new(bytes.Buffer)
 	b.Grow(cap)
 
-	err := binary.Write(b, binary.BigEndian, OpAck) // Op 코드 쓰기
+	err := binary.Write(b, binary.BigEndian, OpAck) // write operation code
 	if err != nil {
 		return nil, err
 	}
 
-	err = binary.Write(b, binary.BigEndian, a) // 블록 번호 쓰기
+	err = binary.Write(b, binary.BigEndian, a) // write block number
 	if err != nil {
 		return nil, err
 	}
@@ -200,20 +197,20 @@ func (a Ack) MarshalBinary() ([]byte, error) {
 }
 
 func (a *Ack) UnmarshalBinary(p []byte) error {
-	var opcode OpCode
+	var code OpCode
 
 	r := bytes.NewReader(p)
 
-	err := binary.Read(r, binary.BigEndian, &opcode)
+	err := binary.Read(r, binary.BigEndian, &code) // read operation code
 	if err != nil {
 		return err
 	}
 
-	if opcode != OpAck {
+	if code != OpAck {
 		return errors.New("invalid ACK")
 	}
 
-	return binary.Read(r, binary.BigEndian, a)
+	return binary.Read(r, binary.BigEndian, a) // read block number
 }
 
 type Err struct {
@@ -222,29 +219,28 @@ type Err struct {
 }
 
 func (e Err) MarshalBinary() ([]byte, error) {
-	// OP코드 + 에러 코드 + 메시지 + 0바이트
-
+	// operation code + error code + message + 0 byte
 	cap := 2 + 2 + len(e.Message) + 1
 
 	b := new(bytes.Buffer)
 	b.Grow(cap)
 
-	err := binary.Write(b, binary.BigEndian, OpErr) // OP 코드 쓰기
+	err := binary.Write(b, binary.BigEndian, OpErr) // write operation code
 	if err != nil {
 		return nil, err
 	}
 
-	err = binary.Write(b, binary.BigEndian, e.Error) // 에러코드 쓰기
+	err = binary.Write(b, binary.BigEndian, e.Error) // write error code
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = b.WriteString(e.Message) // 메시지 쓰기
+	_, err = b.WriteString(e.Message) // write message
 	if err != nil {
 		return nil, err
 	}
 
-	err = b.WriteByte(0) // 0바이트 쓰기
+	err = b.WriteByte(0) // write 0 byte
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +253,7 @@ func (e *Err) UnmarshalBinary(p []byte) error {
 
 	var code OpCode
 
-	err := binary.Read(r, binary.BigEndian, &code)
+	err := binary.Read(r, binary.BigEndian, &code) // read operation code
 	if err != nil {
 		return err
 	}
@@ -266,13 +262,13 @@ func (e *Err) UnmarshalBinary(p []byte) error {
 		return errors.New("invalid ERROR")
 	}
 
-	err = binary.Read(r, binary.BigEndian, &e.Error)
+	err = binary.Read(r, binary.BigEndian, &e.Error) // read error code
 	if err != nil {
 		return err
 	}
 
-	e.Message, err = r.ReadString(0)
-	e.Message = strings.TrimRight(e.Message, "\x00")
+	e.Message, err = r.ReadString(0)                 // read error message
+	e.Message = strings.TrimRight(e.Message, "\x00") // remove the 0-byte
 
 	return err
 }
