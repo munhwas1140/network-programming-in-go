@@ -26,3 +26,14 @@ func TestHeadTime(t *testing.T) {
 
 	t.Logf("time.gov: %s (skew %s)", dt, now.Sub(dt))
 }
+
+func TestReadHeader(t *testing.T) {
+	resp, err := http.Head("https://www.time.gov/")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	t.Logf("Content-Length: %s", resp.Header.Get("Content-Length"))
+}
