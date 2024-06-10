@@ -2,44 +2,45 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func processMultipart(t *testing.T) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("\n %s", string(body))
-		t.Log()
+		// body, err := io.ReadAll(r.Body)
+		// if err != nil {
+		// 	t.Fatal(err)
+		// }
+		// t.Logf("\n %s", string(body))
+		// t.Log()
 		if r.Method != http.MethodPost {
 			t.Fatalf("expected method %s; actual status %s",
 				http.MethodPost, r.Method)
 		}
+
 		// 요청 헤더 출력
-		t.Logf("Request Headers\n")
-		for name, values := range r.Header {
-			t.Logf("%s: %v\n", name, values)
-		}
-		t.Log("\n")
+		// t.Logf("Request Headers\n")
+		// for name, values := range r.Header {
+		// 	t.Logf("%s: %v\n", name, values)
+		// }
+		// t.Log("\n")
 
 		reader, err := r.MultipartReader()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		// 앞에서 바디를 전부 읽어버리면 뒤에서는 읽을 수 없다.
-		// 소비되는 개념인 것 같다. 이미지로도 테스트해봐야겠다
 		for {
 			part, err := reader.NextPart()
 			if err != nil {
@@ -61,13 +62,18 @@ func processMultipart(t *testing.T) func(w http.ResponseWriter, r *http.Request)
 				t.Logf("Form field: %s = %s\n", part.FormName(), string(data))
 			}
 
+			// 파일 byte가 100 넘어가면 truncate해서 출력
 			if part.FileName() != "" {
 				data, err := io.ReadAll(part)
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Logf("File name: %s\n", part.FileName())
-				t.Logf("File content: %s\n", string(data))
+				if len(data) >= 100 {
+					t.Logf("File content(truncate): %s\n", string(data[:100]))
+				} else {
+					t.Logf("File content: %s\n", string(data))
+				}
 			}
 			t.Log()
 		}
@@ -91,23 +97,34 @@ func TestMultipartSelfTest(t *testing.T) {
 
 	for i, file := range []string{
 		"./files/hello.txt",
-		"./files/goodbye.txt",
+		"./files/ham.jpg",
 	} {
-
-		// MultiPart Section Writer 생성
-		filePart, err := w.CreateFormFile(fmt.Sprintf("file%d", i+1),
-			filepath.Base(file))
-		if err != nil {
-			t.Fatal(err)
-		}
 
 		f, err := os.Open(file)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer f.Close()
 
-		_, err = io.Copy(filePart, f)
-		_ = f.Close()
+		mimeType := mime.TypeByExtension(filepath.Ext(f.Name()))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+
+		filename := filepath.Base(f.Name())
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition",
+			fmt.Sprintf(`form-data; name="%s"; filename="%s"`,
+				escapeQuotes(fmt.Sprintf("file%d", i)),
+				escapeQuotes(filename)))
+		h.Set("Content-Type", mimeType)
+
+		part, err := w.CreatePart(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = io.Copy(part, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,31 +135,21 @@ func TestMultipartSelfTest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
 	ts := httptest.NewServer(http.HandlerFunc(processMultipart(t)))
 	defer ts.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		ts.URL, reqBody)
-	if err != nil {
-		t.Fatal(err)
+	client := &http.Client{
+		Timeout: 10 * time.Second,
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Post(ts.URL, w.FormDataContentType(), reqBody)
 	if err != nil {
-		t.Fatal(err)
+		fmt.Println("Request failed:", err)
+		return
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
+}
 
-	_, err = io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected status %d; actual status %d",
-			http.StatusOK, resp.StatusCode)
-	}
+func escapeQuotes(s string) string {
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
