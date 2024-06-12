@@ -1,0 +1,17 @@
+{
+    "apps": {
+        "http": {
+            "servers": {
+                "hello": {
+                    "listen": ["localhost:2020"],
+                    "routes": [{
+                        "handle": [{
+                            "handler": "static_response",
+                            "body": "Hello, world!"
+                        }]
+                    }]
+                }
+            }
+        }
+    }
+}
